@@ -393,9 +393,20 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
         last_update = self.category_last_updated[category]
         elapsed = time.time() - last_update
 
-        # Calculate max age (update interval * threshold)
-        max_age = self.update_interval.total_seconds() * self.STALENESS_THRESHOLD
+        stale_factor = {
+            "battery": UPDATE_INTERVAL_FAST,
+            "es": UPDATE_INTERVAL_FAST,
+            "em": UPDATE_INTERVAL_MEDIUM,
+            "pv": UPDATE_INTERVAL_MEDIUM,
+            "mode": UPDATE_INTERVAL_MEDIUM,
+            "ble": UPDATE_INTERVAL_SLOW,
+            "wifi": UPDATE_INTERVAL_SLOW,
+        }
 
+        category_stale_factor = stale_factor.get(category, 1)
+
+        # Calculate max age (update interval * threshold)
+        max_age = self.update_interval.total_seconds() * self.STALENESS_THRESHOLD * category_stale_factor
         return elapsed < max_age
 
     def _build_command_diagnostics(self, prefix: str, stats: dict[str, Any] | None) -> dict[str, Any]:
@@ -448,7 +459,7 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
 
             def _command_delay() -> float:
                 """Back off a little between calls; go faster while probing initial contact."""
-                return 0.2 if is_first_update and not had_success else 1.0
+                return 2.0 if is_first_update and not had_success else 5.0
 
             if is_first_update:
                 _LOGGER.debug("First update - fetching device info")
@@ -463,70 +474,73 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
                 except Exception as err:
                     _LOGGER.warning("Failed to get device info on first update: %s", err)
 
-            # High priority - every update (~60s)
-            # ES.GetStatus and Bat.GetStatus for real-time power/energy data
-            try:
-                await asyncio.sleep(_command_delay())  # Delay between API calls
-                es_status = await self.api.get_es_status(**_command_kwargs())
-            except Exception as err:
-                _LOGGER.debug("Failed to get ES status: %s", err)
-                es_status = None
 
-            if es_status:
-                # Scale firmware-dependent values
-                if "bat_power" in es_status:
-                    es_status["bat_power"] = self.compatibility.scale_value(
-                        es_status["bat_power"], "bat_power"
-                    )
-                if "total_grid_input_energy" in es_status:
-                    es_status["total_grid_input_energy"] = self.compatibility.scale_value(
-                        es_status["total_grid_input_energy"], "total_grid_input_energy"
-                    )
-                if "total_grid_output_energy" in es_status:
-                    es_status["total_grid_output_energy"] = self.compatibility.scale_value(
-                        es_status["total_grid_output_energy"], "total_grid_output_energy"
-                    )
-                if "total_load_energy" in es_status:
-                    es_status["total_load_energy"] = self.compatibility.scale_value(
-                        es_status["total_load_energy"], "total_load_energy"
-                    )
+            run_fast = self.update_count == 1 or self.update_count % UPDATE_INTERVAL_FAST == 0
+            if is_first_update or run_fast:
+                # High priority - every update (~60s)
+                # ES.GetStatus and Bat.GetStatus for real-time power/energy data
+                try:
+                    await asyncio.sleep(_command_delay())  # Delay between API calls
+                    es_status = await self.api.get_es_status(**_command_kwargs())
+                except Exception as err:
+                    _LOGGER.debug("Failed to get ES status: %s", err)
+                    es_status = None
 
-                data["es"] = es_status
-                self.category_last_updated["es"] = time.time()
-                had_success = True
+                if es_status:
+                    # Scale firmware-dependent values
+                    if "bat_power" in es_status:
+                        es_status["bat_power"] = self.compatibility.scale_value(
+                            es_status["bat_power"], "bat_power"
+                        )
+                    if "total_grid_input_energy" in es_status:
+                        es_status["total_grid_input_energy"] = self.compatibility.scale_value(
+                            es_status["total_grid_input_energy"], "total_grid_input_energy"
+                        )
+                    if "total_grid_output_energy" in es_status:
+                        es_status["total_grid_output_energy"] = self.compatibility.scale_value(
+                            es_status["total_grid_output_energy"], "total_grid_output_energy"
+                        )
+                    if "total_load_energy" in es_status:
+                        es_status["total_load_energy"] = self.compatibility.scale_value(
+                            es_status["total_load_energy"], "total_load_energy"
+                        )
 
-            try:
-                await asyncio.sleep(_command_delay())  # Delay between API calls
-                battery_status = await self.api.get_battery_status(**_command_kwargs())
-            except Exception as err:
-                _LOGGER.debug("Failed to get battery status: %s", err)
-                battery_status = None
+                    data["es"] = es_status
+                    self.category_last_updated["es"] = time.time()
+                    had_success = True
 
-            if battery_status:
-                # Scale firmware/hardware-dependent values
-                if "bat_temp" in battery_status:
-                    battery_status["bat_temp"] = self.compatibility.scale_value(
-                        battery_status["bat_temp"], "bat_temp"
-                    )
-                if "bat_capacity" in battery_status:
-                    battery_status["bat_capacity"] = self.compatibility.scale_value(
-                        battery_status["bat_capacity"], "bat_capacity"
-                    )
-                if "bat_voltage" in battery_status:
-                    battery_status["bat_voltage"] = self.compatibility.scale_value(
-                        battery_status["bat_voltage"], "bat_voltage"
-                    )
-                if "bat_current" in battery_status:
-                    battery_status["bat_current"] = self.compatibility.scale_value(
-                        battery_status["bat_current"], "bat_current"
-                    )
-                data["battery"] = battery_status
-                self.category_last_updated["battery"] = time.time()
-                had_success = True
+                try:
+                    await asyncio.sleep(_command_delay())  # Delay between API calls
+                    battery_status = await self.api.get_battery_status(**_command_kwargs())
+                except Exception as err:
+                    _LOGGER.debug("Failed to get battery status: %s", err)
+                    battery_status = None
+
+                if battery_status:
+                    # Scale firmware/hardware-dependent values
+                    if "bat_temp" in battery_status:
+                        battery_status["bat_temp"] = self.compatibility.scale_value(
+                            battery_status["bat_temp"], "bat_temp"
+                        )
+                    if "bat_capacity" in battery_status:
+                        battery_status["bat_capacity"] = self.compatibility.scale_value(
+                            battery_status["bat_capacity"], "bat_capacity"
+                        )
+                    if "bat_voltage" in battery_status:
+                        battery_status["bat_voltage"] = self.compatibility.scale_value(
+                            battery_status["bat_voltage"], "bat_voltage"
+                        )
+                    if "bat_current" in battery_status:
+                        battery_status["bat_current"] = self.compatibility.scale_value(
+                            battery_status["bat_current"], "bat_current"
+                        )
+                    data["battery"] = battery_status
+                    self.category_last_updated["battery"] = time.time()
+                    had_success = True
 
             # Medium priority - every 5th update (~300s)
             # EM, PV, Mode - slower-changing data
-            run_medium = self.update_count == 1 or self.update_count % UPDATE_INTERVAL_MEDIUM == 0
+            run_medium = self.update_count == 1 or self.update_count % UPDATE_INTERVAL_MEDIUM == 1
             if is_first_update and not had_success:
                 run_medium = False
             if run_medium:
@@ -564,7 +578,7 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
 
             # Low priority - every 10th update (~600s)
             # Device, WiFi, BLE - static/diagnostic data
-            run_slow = self.update_count % UPDATE_INTERVAL_SLOW == 0
+            run_slow = self.update_count % UPDATE_INTERVAL_SLOW == 2
             if is_first_update and not had_success:
                 run_slow = False
             if run_slow:
