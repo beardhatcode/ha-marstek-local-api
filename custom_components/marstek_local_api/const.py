@@ -13,7 +13,7 @@ DISCOVERY_TIMEOUT: Final = 9  # Discovery window in seconds
 DISCOVERY_BROADCAST_INTERVAL: Final = 2  # Broadcast every 2 seconds during discovery
 
 # Update intervals (in multiples of base interval)
-UPDATE_INTERVAL_FAST: Final = 1  # ES, Battery status (60s)
+UPDATE_INTERVAL_FAST: Final = 2  # ES, Battery status (60s)
 UPDATE_INTERVAL_MEDIUM: Final = 5  # EM, PV, Mode (300s)
 UPDATE_INTERVAL_SLOW: Final = 10  # Device, WiFi, BLE (600s)
 
